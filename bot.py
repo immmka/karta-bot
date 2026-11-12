@@ -74,9 +74,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/list — последние 10 записей\n"
         "/map — ссылка на карту\n\n"
         "Пример добавления:\n"
-        "/add Остерия Марио\n"
-        "ул. Тверская, 12\n"
-        "Хворостова"
+        "/add Rizz\n"
+        "ул. Пятницкая, 24\n"
+        "Лера\n"
+        "Бар"
     )
     await update.message.reply_text(text)
 
@@ -88,11 +89,12 @@ async def add_place(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = lines[0].replace("/add", "").strip()
     address = lines[1].strip() if len(lines) > 1 else ""
     manager = lines[2].strip() if len(lines) > 2 else ""
+    category = lines[3].strip() if len(lines) > 3 else ""
 
     if not name:
         await update.message.reply_text(
-            "Использование:\n/add Название заведения\nАдрес\nМенеджер\n\n"
-            "Пример:\n/add Остерия Марио\nул. Тверская, 12\nХворостова"
+            "Использование:\n/add Название\nАдрес\nМенеджер\nКатегория\n\n"
+            "Пример:\n/add Rizz\nул. Пятницкая, 24\nЛера\nБар"
         )
         return
 
@@ -104,28 +106,37 @@ async def add_place(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         sheet = get_sheet()
-        row = [
-            "",                     # id
-            "",                     # ООО
-            name,                   # Название заведения
-            manager,                # Менеджер
-            "potential",            # Status
-            "",                     # Phone
-            "",                     # Notes
-            lat or "",              # lat
-            lng or "",              # lng
-            datetime.now().strftime("%Y-%m-%d %H:%M"),  # update
-            address or ""           # address
-        ]
+        # Порядок столбцов: id, ООО, Название, Менеджер, Категория, Status, Phone, Notes, lat, lng, address, update
+        # Подстраиваем под текущую структуру (категория после менеджера)
+        headers = sheet.row_values(1)
+        row = [""] * len(headers)
+        
+        def set_col(name_variants, value):
+            for i, h in enumerate(headers):
+                if h.strip().lower() in [v.lower() for v in name_variants]:
+                    row[i] = value
+                    return
+
+        set_col(["название заведения", "название"], name)
+        set_col(["менеджер"], manager)
+        set_col(["категория", "category"], category)
+        set_col(["status"], "potential")
+        set_col(["lat", "широта"], lat or "")
+        set_col(["lng", "долгота"], lng or "")
+        set_col(["address", "адрес"], address or "")
+        set_col(["update"], datetime.now().strftime("%Y-%m-%d %H:%M"))
+
         sheet.append_row(row)
 
         reply = f"Добавлено: *{name}*\n"
+        if category:
+            reply += f"Категория: {category}\n"
         if manager:
             reply += f"Менеджер: {manager}\n"
         if lat and lng:
             reply += f"Адрес: {full_address}\nКоординаты: {lat:.5f}, {lng:.5f}"
         else:
-            reply += "Координаты не найдены. Добавь lat/lng вручную в таблице."
+            reply += "Координаты не найдены."
         await update.message.reply_text(reply, parse_mode="Markdown")
     except Exception as e:
         logger.error(e)
