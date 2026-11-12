@@ -2,8 +2,8 @@ import os
 import logging
 import json
 from datetime import datetime
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import gspread
 from google.oauth2.service_account import Credentials
 import requests
@@ -63,23 +63,18 @@ def normalize_status(text: str) -> str:
 
 # ==================== КОМАНДЫ ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [KeyboardButton("➕ Добавить"), KeyboardButton("🔄 Статус")],
+        [KeyboardButton("🔍 Найти"), KeyboardButton("📊 Статистика")],
+        [KeyboardButton("🗑 Удалить"), KeyboardButton("🗺 Карта")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     text = (
         "Привет! Я бот для управления картой клиентов.\n\n"
         "Карта: https://immmka.github.io/khm/\n\n"
-        "Команды:\n"
-        "/add — добавить заведение\n"
-        "/status — изменить статус\n"
-        "/find — найти заведение\n"
-        "/stats — статистика\n"
-        "/list — последние 10 записей\n"
-        "/map — ссылка на карту\n\n"
-        "Пример добавления:\n"
-        "/add Rizz\n"
-        "ул. Пятницкая, 24\n"
-        "Лера\n"
-        "Бар"
+        "Выбери действие кнопками ниже:"
     )
-    await update.message.reply_text(text)
+    await update.message.reply_text(text, reply_markup=reply_markup)
 
 async def map_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Карта: https://immmka.github.io/khm/")
@@ -240,6 +235,108 @@ async def list_places(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Ошибка: {e}")
 
+async def delete_place(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Использование: /delete Название заведения\n\nИли нажми кнопку «Удалить» и напиши название.")
+        return
+
+    name_query = " ".join(context.args).lower()
+    try:
+        sheet = get_sheet()
+        records = sheet.get_all_records()
+        found_row = None
+        for i, row in enumerate(records, start=2):
+            if name_query in str(row.get("Название заведения", "")).lower():
+                found_row = i
+                name = row.get("Название заведения")
+                break
+
+        if not found_row:
+            await update.message.reply_text("Заведение не найдено.")
+            return
+
+        # Простое подтверждение через ответ
+        await update.message.reply_text(
+            f"Точно удалить *{name}*?\n\nНапиши «да» для подтверждения.",
+            parse_mode="Markdown"
+        )
+        context.user_data["pending_delete"] = found_row
+        context.user_data["pending_name"] = name
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка: {e}")
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+
+    # Подтверждение удаления
+    if context.user_data.get("pending_delete") and text.lower() in ["да", "yes", "удалить"]:
+        try:
+            sheet = get_sheet()
+            row_idx = context.user_data["pending_delete"]
+            name = context.user_data["pending_name"]
+            sheet.delete_rows(row_idx)
+            await update.message.reply_text(f"Удалено: {name}")
+        except Exception as e:
+            await update.message.reply_text(f"Ошибка при удалении: {e}")
+        finally:
+            context.user_data.pop("pending_delete", None)
+            context.user_data.pop("pending_name", None)
+        return
+
+    # Кнопки
+    if text == "➕ Добавить":
+        await update.message.reply_text(
+            "Отправь данные в формате:\n\nНазвание\nАдрес\nМенеджер\nКатегория\n\n"
+            "Пример:\nRizz\nул. Пятницкая, 24\nЛера\nБар"
+        )
+        context.user_data["awaiting_add"] = True
+        return
+    if text == "🔄 Статус":
+        await update.message.reply_text("Напиши: Название заведения статус\n\nПример: Rizz работаю")
+        context.user_data["awaiting_status"] = True
+        return
+    if text == "🔍 Найти":
+        await update.message.reply_text("Напиши часть названия для поиска.")
+        context.user_data["awaiting_find"] = True
+        return
+    if text == "📊 Статистика":
+        await stats(update, context)
+        return
+    if text == "🗑 Удалить":
+        await update.message.reply_text("Напиши название заведения, которое хочешь удалить.")
+        context.user_data["awaiting_delete"] = True
+        return
+    if text == "🗺 Карта":
+        await map_link(update, context)
+        return
+
+    # Обработка ожидаемых вводов
+    if context.user_data.get("awaiting_add"):
+        context.user_data["awaiting_add"] = False
+        # Имитируем команду /add
+        update.message.text = "/add\n" + text
+        await add_place(update, context)
+        return
+    if context.user_data.get("awaiting_status"):
+        context.user_data["awaiting_status"] = False
+        parts = text.split()
+        if len(parts) >= 2:
+            context.args = parts
+            await change_status(update, context)
+        else:
+            await update.message.reply_text("Нужно название и статус.")
+        return
+    if context.user_data.get("awaiting_find"):
+        context.user_data["awaiting_find"] = False
+        context.args = [text]
+        await find_place(update, context)
+        return
+    if context.user_data.get("awaiting_delete"):
+        context.user_data["awaiting_delete"] = False
+        context.args = [text]
+        await delete_place(update, context)
+        return
+
 # ==================== ЗАПУСК ====================
 def main():
     application = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -251,6 +348,8 @@ def main():
     application.add_handler(CommandHandler("stats", stats))
     application.add_handler(CommandHandler("list", list_places))
     application.add_handler(CommandHandler("map", map_link))
+    application.add_handler(CommandHandler("delete", delete_place))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     logger.info("Бот запущен...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
