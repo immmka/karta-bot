@@ -82,7 +82,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [KeyboardButton("➕ Добавить"), KeyboardButton("🔄 Статус")],
         [KeyboardButton("🔍 Найти"), KeyboardButton("📊 Статистика")],
-        [KeyboardButton("🗑 Удалить"), KeyboardButton("🗺 Карта")]
+        [KeyboardButton("🗑 Удалить"), KeyboardButton("📋 Последние 10")],
+        [KeyboardButton("🗺 Карта"), KeyboardButton("❓ Помощь")]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     text = (
@@ -321,8 +322,19 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Напиши название заведения, которое хочешь удалить.")
         context.user_data["awaiting_delete"] = True
         return
-    if text == "🗺 Карта":
-        await map_link(update, context)
+    if text == "📋 Последние 10":
+        await list_places(update, context)
+        return
+    if text == "❓ Помощь":
+        await update.message.reply_text(
+            "Команды и кнопки:\n\n"
+            "➕ Добавить — название\\nадрес\\nменеджер\\nкатегория\\nтелефон\\nзаметки\n"
+            "🔄 Статус — название статус\n"
+            "🔍 Найти — часть названия (регистр не важен)\n"
+            "🗑 Удалить — название\n"
+            "📋 Последние 10 — последние записи\n"
+            "🗺 Карта — ссылка"
+        )
         return
 
     # Обработка ожидаемых вводов
