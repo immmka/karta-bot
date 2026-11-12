@@ -20,7 +20,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== GOOGLE SHEETS ====================
-def get_sheet():
+def get_spreadsheet():
     service_account_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT"])
     creds = Credentials.from_service_account_info(
         service_account_info,
@@ -30,8 +30,24 @@ def get_sheet():
         ]
     )
     client = gspread.authorize(creds)
-    spreadsheet = client.open_by_key(SPREADSHEET_ID)
-    return spreadsheet.sheet1
+    return client.open_by_key(SPREADSHEET_ID)
+
+def get_all_records():
+    spreadsheet = get_spreadsheet()
+    all_records = []
+    for ws in spreadsheet.worksheets():
+        try:
+            records = ws.get_all_records()
+            for r in records:
+                r["_sheet"] = ws.title
+            all_records.extend(records)
+        except Exception:
+            continue
+    return all_records
+
+def get_sheet():
+    # Оставляем для записи (по умолчанию первый лист)
+    return get_spreadsheet().sheet1
 
 def geocode_address(address: str):
     try:
@@ -181,8 +197,7 @@ async def find_place(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = " ".join(context.args).lower()
     try:
-        sheet = get_sheet()
-        records = sheet.get_all_records()
+        records = get_all_records()
         results = [r for r in records if query in str(r.get("Название заведения", "")).lower()]
 
         if not results:
@@ -195,7 +210,8 @@ async def find_place(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"*{r.get('Название заведения', '—')}*\n"
                 f"Статус: {r.get('Status', '—')}\n"
                 f"Менеджер: {r.get('Менеджер', '—')}\n"
-                f"Адрес: {r.get('address', '—')}\n\n"
+                f"Адрес: {r.get('address', '—')}\n"
+                f"Лист: {r.get('_sheet', '—')}\n\n"
             )
         await update.message.reply_text(text, parse_mode="Markdown")
     except Exception as e:
@@ -203,8 +219,7 @@ async def find_place(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        sheet = get_sheet()
-        records = sheet.get_all_records()
+        records = get_all_records()
         total = len(records)
         working = sum(1 for r in records if str(r.get("Status", "")).lower() == "working")
         not_working = sum(1 for r in records if str(r.get("Status", "")).lower() == "not")
