@@ -65,18 +65,23 @@ def normalize_status(text: str) -> str:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "Привет! Я бот для управления картой клиентов.\n\n"
+        "Карта: https://immmka.github.io/khm/\n\n"
         "Команды:\n"
         "/add — добавить заведение\n"
         "/status — изменить статус\n"
         "/find — найти заведение\n"
         "/stats — статистика\n"
-        "/list — последние 10 записей\n\n"
+        "/list — последние 10 записей\n"
+        "/map — ссылка на карту\n\n"
         "Пример добавления:\n"
         "/add Остерия Марио\n"
         "ул. Тверская, 12\n"
         "Хворостова"
     )
     await update.message.reply_text(text)
+
+async def map_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Карта: https://immmka.github.io/khm/")
 
 async def add_place(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = update.message.text.split("\n")
@@ -234,6 +239,7 @@ def main():
     application.add_handler(CommandHandler("find", find_place))
     application.add_handler(CommandHandler("stats", stats))
     application.add_handler(CommandHandler("list", list_places))
+    application.add_handler(CommandHandler("map", map_link))
 
     logger.info("Бот запущен...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
