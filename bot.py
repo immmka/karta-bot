@@ -34,7 +34,6 @@ def get_sheet():
     return spreadsheet.sheet1
 
 def geocode_address(address: str):
-    """Получает координаты через Nominatim (OpenStreetMap)"""
     try:
         url = "https://nominatim.openstreetmap.org/search"
         params = {
@@ -74,24 +73,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/list — последние 10 записей\n\n"
         "Пример добавления:\n"
         "/add Остерия Марио\n"
-        "ул. Тверская, 12"
+        "ул. Тверская, 12\n"
+        "Хворостова"
     )
     await update.message.reply_text(text)
 
 async def add_place(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args and "\n" not in (update.message.text or ""):
-        await update.message.reply_text(
-            "Использование:\n/add Название заведения\nАдрес\n\n"
-            "Пример:\n/add Остерия Марио\nул. Тверская, 12"
-        )
-        return
-
     lines = update.message.text.split("\n")
     name = lines[0].replace("/add", "").strip()
-    address = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
+    address = lines[1].strip() if len(lines) > 1 else ""
+    manager = lines[2].strip() if len(lines) > 2 else ""
 
     if not name:
-        await update.message.reply_text("Укажи название заведения.")
+        await update.message.reply_text(
+            "Использование:\n/add Название заведения\nАдрес\nМенеджер\n\n"
+            "Пример:\n/add Остерия Марио\nул. Тверская, 12\nХворостова"
+        )
         return
 
     await update.message.reply_text("Ищу координаты по адресу...")
@@ -106,7 +103,7 @@ async def add_place(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "",                     # id
             "",                     # ООО
             name,                   # Название заведения
-            "",                     # Менеджер
+            manager,                # Менеджер
             "potential",            # Status
             "",                     # Phone
             "",                     # Notes
@@ -118,6 +115,8 @@ async def add_place(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sheet.append_row(row)
 
         reply = f"Добавлено: *{name}*\n"
+        if manager:
+            reply += f"Менеджер: {manager}\n"
         if lat and lng:
             reply += f"Адрес: {full_address}\nКоординаты: {lat:.5f}, {lng:.5f}"
         else:
