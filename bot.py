@@ -1,17 +1,16 @@
 import os
 import logging
+import json
 from datetime import datetime
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes
 import gspread
 from google.oauth2.service_account import Credentials
 import requests
-import json
 
 # ==================== НАСТРОЙКИ ====================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "9226822324:AAGlVD__eYZcPTrzEgSeNbHR2KoU5OTtA5k")
 SPREADSHEET_ID = "11nvKladxDSIc1zqJtOQ0_M-KD_su-bR2a1bBQfsN894"
-SERVICE_ACCOUNT_FILE = "service_account.json"  # положи JSON рядом с ботом
 
 # ==================== ЛОГИ ====================
 logging.basicConfig(
@@ -21,13 +20,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== GOOGLE SHEETS ====================
-SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive"
-]
-
 def get_sheet():
-    creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+    service_account_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT"])
+    creds = Credentials.from_service_account_info(
+        service_account_info,
+        scopes=[
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
+    )
     client = gspread.authorize(creds)
     spreadsheet = client.open_by_key(SPREADSHEET_ID)
     return spreadsheet.sheet1
@@ -78,14 +79,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 async def add_place(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
+    if not context.args and "\n" not in (update.message.text or ""):
         await update.message.reply_text(
             "Использование:\n/add Название заведения\nАдрес\n\n"
             "Пример:\n/add Остерия Марио\nул. Тверская, 12"
         )
         return
 
-    # Первая строка — название, остальное — адрес
     lines = update.message.text.split("\n")
     name = lines[0].replace("/add", "").strip()
     address = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
@@ -102,7 +102,6 @@ async def add_place(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         sheet = get_sheet()
-        # Новая строка
         row = [
             "",                     # id
             "",                     # ООО
@@ -126,7 +125,7 @@ async def add_place(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(reply, parse_mode="Markdown")
     except Exception as e:
         logger.error(e)
-        await update.message.reply_text(f"Ошибка при записи в таблицу: {e}")
+        await update.message.reply_text(f"Ошибка при записи в таблицу:\n{e}")
 
 async def change_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
@@ -136,7 +135,6 @@ async def change_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Последнее слово — статус, всё остальное — название
     status_raw = context.args[-1]
     name_query = " ".join(context.args[:-1])
     new_status = normalize_status(status_raw)
@@ -146,15 +144,14 @@ async def change_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         records = sheet.get_all_records()
         headers = sheet.row_values(1)
 
-        name_col = headers.index("Название заведения") + 1 if "Название заведения" in headers else 3
         status_col = headers.index("Status") + 1 if "Status" in headers else 5
+        update_col = headers.index("update") + 1 if "update" in headers else 10
 
         found = False
         for i, row in enumerate(records, start=2):
             if name_query.lower() in str(row.get("Название заведения", "")).lower():
                 sheet.update_cell(i, status_col, new_status)
-                sheet.update_cell(i, headers.index("update") + 1 if "update" in headers else 10,
-                                  datetime.now().strftime("%Y-%m-%d %H:%M"))
+                sheet.update_cell(i, update_col, datetime.now().strftime("%Y-%m-%d %H:%M"))
                 await update.message.reply_text(
                     f"Статус обновлён:\n*{row.get('Название заведения')}* → {new_status}",
                     parse_mode="Markdown"
@@ -219,7 +216,7 @@ async def list_places(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         sheet = get_sheet()
         records = sheet.get_all_records()
-        last = records[-10:][::-1]  # последние 10
+        last = records[-10:][::-1]
 
         text = "Последние записи:\n\n"
         for r in last:
