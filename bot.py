@@ -96,8 +96,73 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def map_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Карта: https://immmka.github.io/khm/")
 
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.user_data.get("awaiting_add"):
+        await update.message.reply_text("Сначала нажми «➕ Добавить» и отправь данные, потом фото.")
+        return
+
+    photo = update.message.photo[-1]  # самое большое
+    file_id = photo.file_id
+    context.user_data["pending_photo"] = file_id
+    await update.message.reply_text("Фото получено. Теперь отправь текст с данными заведения (или напиши «готово», если данные уже были).")
+
 async def add_place(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    lines = update.message.text.split("\n")
+    text = update.message.text or ""
+    if text.startswith("/add"):
+        text = text[4:].strip()
+    lines = [l.strip() for l in text.split("\n") if l.strip()]
+
+    if len(lines) < 2:
+        await update.message.reply_text(
+            "Отправь данные в формате:\n\nНазвание\nАдрес\nМенеджер\nКатегория\nТелефон\nЗаметки\n\n"
+            "Можно сразу приложить фото."
+        )
+        return
+
+    name = lines[0]
+    address = lines[1] if len(lines) > 1 else ""
+    manager = lines[2] if len(lines) > 2 else ""
+    category = lines[3] if len(lines) > 3 else "Бар"
+    phone = lines[4] if len(lines) > 4 else ""
+    notes = lines[5] if len(lines) > 5 else ""
+    photo_id = context.user_data.pop("pending_photo", "")
+
+    lat, lng, full_addr = geocode_address(address) if address else (None, None, None)
+
+    try:
+        sheet = get_sheet()
+        headers = sheet.row_values(1)
+        row = [""] * len(headers)
+
+        def set_col(names, value):
+            for i, h in enumerate(headers):
+                if any(n.lower() in h.lower() for n in names):
+                    row[i] = value
+                    return
+
+        set_col(["название заведения", "название"], name)
+        set_col(["ооо", "фирма"], "")
+        set_col(["менеджер"], manager)
+        set_col(["категория", "category"], category)
+        set_col(["status"], "potential")
+        set_col(["phone", "телефон", "номер"], phone)
+        set_col(["notes", "заметки"], notes)
+        set_col(["address", "адрес"], full_addr or address)
+        set_col(["lat", "широта"], lat or "")
+        set_col(["lng", "долгота"], lng or "")
+        set_col(["фото", "photo", "image"], photo_id)
+        set_col(["update"], datetime.now().strftime("%Y-%m-%d %H:%M"))
+
+        sheet.append_row(row)
+        await update.message.reply_text(
+            f"Добавлено: {name}\n"
+            f"Адрес: {full_addr or address}\n"
+            f"Координаты: {lat}, {lng}\n"
+            f"Фото: {'да' if photo_id else 'нет'}"
+        )
+    except Exception as e:
+        logger.error(f"Add error: {e}")
+        await update.message.reply_text(f"Ошибка при добавлении: {e}")
     name = lines[0].replace("/add", "").strip()
     address = lines[1].strip() if len(lines) > 1 else ""
     manager = lines[2].strip() if len(lines) > 2 else ""
@@ -192,14 +257,18 @@ async def change_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Ошибка: {e}")
 
 async def find_place(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("Использование: /find часть названия")
+    query = " ".join(context.args).lower().strip() if context.args else ""
+    if not query:
+        await update.message.reply_text("Напиши часть названия для поиска.")
         return
 
-    query = " ".join(context.args).lower()
     try:
         records = get_all_records()
-        results = [r for r in records if query in str(r.get("Название заведения", "")).lower()]
+        results = []
+        for r in records:
+            name = str(r.get("Название заведения") or r.get("название") or r.get("Название") or "").lower()
+            if query in name:
+                results.append(r)
 
         if not results:
             await update.message.reply_text("Ничего не найдено.")
@@ -207,16 +276,21 @@ async def find_place(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         text = ""
         for r in results[:5]:
+            name = r.get("Название заведения") or r.get("название") or "—"
+            status = r.get("Status") or r.get("status") or "—"
+            manager = r.get("Менеджер") or r.get("менеджер") or "—"
+            address = r.get("address") or r.get("Адрес") or r.get("адрес") or "—"
             text += (
-                f"*{r.get('Название заведения', '—')}*\n"
-                f"Статус: {r.get('Status', '—')}\n"
-                f"Менеджер: {r.get('Менеджер', '—')}\n"
-                f"Адрес: {r.get('address', '—')}\n"
+                f"*{name}*\n"
+                f"Статус: {status}\n"
+                f"Менеджер: {manager}\n"
+                f"Адрес: {address}\n"
                 f"Лист: {r.get('_sheet', '—')}\n\n"
             )
         await update.message.reply_text(text, parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"Ошибка: {e}")
+        logger.error(f"Find error: {e}")
+        await update.message.reply_text(f"Ошибка поиска: {e}")
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -302,7 +376,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Кнопки
     if text == "➕ Добавить":
         await update.message.reply_text(
-            "Отправь данные в формате:\n\nНазвание\nАдрес\nМенеджер\nКатегория\n\n"
+            "Отправь данные в формате:\n\nНазвание\nАдрес\nМенеджер\nКатегория\nТелефон\nЗаметки\n\n"
+            "Можно сразу приложить фото к сообщению.\n\n"
             "Пример:\nRizz\nул. Пятницкая, 24\nЛера\nБар"
         )
         context.user_data["awaiting_add"] = True
@@ -324,6 +399,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if text == "📋 Последние 10":
         await list_places(update, context)
+        return
+    if text == "🗺 Карта":
+        await map_link(update, context)
         return
     if text == "❓ Помощь":
         await update.message.reply_text(
@@ -376,6 +454,7 @@ def main():
     application.add_handler(CommandHandler("list", list_places))
     application.add_handler(CommandHandler("map", map_link))
     application.add_handler(CommandHandler("delete", delete_place))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     logger.info("Бот запущен...")
