@@ -119,6 +119,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(text, reply_markup=reply_markup)
 
+async def map_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Карта: https://immmka.github.io/khm/")
+
 async def near_places(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Отправь свою геолокацию (скрепка → Геопозиция), и я покажу ближайшие заведения.")
     context.user_data["awaiting_location"] = True
@@ -524,6 +527,18 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["awaiting_add"] = True
         return
     if context.user_data.get("awaiting_add"):
+        if text.lower() in ["отмена", "cancel", "отменить"]:
+            context.user_data["awaiting_add"] = False
+            context.user_data.pop("add_manager", None)
+            context.user_data.pop("add_category", None)
+            await update.message.reply_text("Добавление отменено.", reply_markup=ReplyKeyboardMarkup([
+                [KeyboardButton("➕ Добавить"), KeyboardButton("🔄 Статус")],
+                [KeyboardButton("🔍 Найти"), KeyboardButton("📊 Статистика")],
+                [KeyboardButton("🗑 Удалить"), KeyboardButton("📋 Последние 10")],
+                [KeyboardButton("🗺 Карта"), KeyboardButton("📍 Рядом")],
+                [KeyboardButton("👤 Менеджер"), KeyboardButton("❓ Помощь")]
+            ], resize_keyboard=True))
+            return
         context.user_data["awaiting_add"] = False
         # Имитируем команду /add
         update.message.text = "/add\n" + text
