@@ -8,9 +8,13 @@ import gspread
 from google.oauth2.service_account import Credentials
 import requests
 
-# ==================== НАСТРОЙКИ ====================
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "9226822324:AAGlVD__eYZcPTrzEgSeNbHR2KoU5OTtA5k")
-SPREADSHEET_ID = "11nvKladxDSIc1zqJtOQ0_M-KD_su-bR2a1bBQfsN894"
+MANAGERS = ["Дима б", "Лера", "Алина", "Дима ч", "Антон", "Артур", "Александр"]
+CATEGORIES = ["Ресторан", "Бар", "Клуб", "Лаундж"]
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+if not TELEGRAM_TOKEN:
+    raise RuntimeError("TELEGRAM_TOKEN не задан в переменных окружения")
+
+SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "11nvKladxDSIc1zqJtOQ0_M-KD_su-bR2a1bBQfsN894")
 
 # ==================== ЛОГИ ====================
 logging.basicConfig(
@@ -50,6 +54,27 @@ def get_sheet():
     return get_spreadsheet().sheet1
 
 def geocode_address(address: str):
+    # Яндекс Геокодер (замени YOUR_YANDEX_KEY на свой ключ)
+    YANDEX_KEY = os.getenv("YANDEX_GEOCODER_KEY", "YOUR_YANDEX_KEY")
+    if YANDEX_KEY and YANDEX_KEY != "YOUR_YANDEX_KEY":
+        try:
+            url = "https://geocode-maps.yandex.ru/1.x/"
+            params = {
+                "apikey": YANDEX_KEY,
+                "geocode": f"{address}, Москва",
+                "format": "json",
+                "results": 1
+            }
+            r = requests.get(url, params=params, timeout=10)
+            data = r.json()
+            pos = data["response"]["GeoObjectCollection"]["featureMember"][0]["GeoObject"]["Point"]["pos"]
+            lng, lat = map(float, pos.split())
+            text = data["response"]["GeoObjectCollection"]["featureMember"][0]["GeoObject"]["metaDataProperty"]["GeocoderMetaData"]["text"]
+            return lat, lng, text
+        except Exception as e:
+            logger.error(f"Yandex geocode error: {e}")
+
+    # Fallback Nominatim
     try:
         url = "https://nominatim.openstreetmap.org/search"
         params = {
@@ -83,7 +108,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [KeyboardButton("➕ Добавить"), KeyboardButton("🔄 Статус")],
         [KeyboardButton("🔍 Найти"), KeyboardButton("📊 Статистика")],
         [KeyboardButton("🗑 Удалить"), KeyboardButton("📋 Последние 10")],
-        [KeyboardButton("🗺 Карта"), KeyboardButton("❓ Помощь")]
+        [KeyboardButton("🗺 Карта"), KeyboardButton("📍 Рядом")],
+        [KeyboardButton("👤 Менеджер"), KeyboardButton("❓ Помощь")]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     text = (
@@ -93,8 +119,57 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(text, reply_markup=reply_markup)
 
-async def map_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Карта: https://immmka.github.io/khm/")
+async def near_places(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Отправь свою геолокацию (скрепка → Геопозиция), и я покажу ближайшие заведения.")
+    context.user_data["awaiting_location"] = True
+
+async def manager_places(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Использование: /manager Имя\nПример: /manager Лера")
+        return
+    name = " ".join(context.args).lower()
+    try:
+        records = get_all_records()
+        results = [r for r in records if name in str(r.get("Менеджер") or r.get("менеджер") or "").lower()]
+        if not results:
+            await update.message.reply_text("Ничего не найдено.")
+            return
+        text = f"Заведения менеджера ({len(results)}):\n\n"
+        for r in results[:15]:
+            text += f"• {r.get('Название заведения', '—')} ({r.get('Status', '—')})\n"
+        await update.message.reply_text(text)
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка: {e}")
+
+async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.user_data.get("awaiting_location"):
+        return
+    context.user_data["awaiting_location"] = False
+    loc = update.message.location
+    try:
+        records = get_all_records()
+        nearby = []
+        for r in records:
+            try:
+                lat = float(r.get("lat") or 0)
+                lng = float(r.get("lng") or 0)
+                if not lat or not lng:
+                    continue
+                dist = ((lat - loc.latitude)**2 + (lng - loc.longitude)**2)**0.5
+                if dist < 0.02:  # примерно 2 км
+                    nearby.append((dist, r))
+            except:
+                continue
+        nearby.sort(key=lambda x: x[0])
+        if not nearby:
+            await update.message.reply_text("Рядом ничего не найдено.")
+            return
+        text = "Ближайшие заведения:\n\n"
+        for dist, r in nearby[:8]:
+            text += f"• {r.get('Название заведения', '—')} ({r.get('Status', '—')})\n"
+        await update.message.reply_text(text)
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка: {e}")
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.user_data.get("awaiting_add"):
@@ -121,10 +196,10 @@ async def add_place(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     name = lines[0]
     address = lines[1] if len(lines) > 1 else ""
-    manager = lines[2] if len(lines) > 2 else ""
-    category = lines[3] if len(lines) > 3 else "Бар"
-    phone = lines[4] if len(lines) > 4 else ""
-    notes = lines[5] if len(lines) > 5 else ""
+    phone = lines[2] if len(lines) > 2 else ""
+    notes = lines[3] if len(lines) > 3 else ""
+    manager = context.user_data.pop("add_manager", "")
+    category = context.user_data.pop("add_category", "Бар")
     photo_id = context.user_data.pop("pending_photo", "")
 
     lat, lng, full_addr = geocode_address(address) if address else (None, None, None)
@@ -375,12 +450,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Кнопки
     if text == "➕ Добавить":
+        keyboard = [[KeyboardButton(m)] for m in MANAGERS]
+        keyboard.append([KeyboardButton("Пропустить")])
         await update.message.reply_text(
-            "Отправь данные в формате:\n\nНазвание\nАдрес\nМенеджер\nКатегория\nТелефон\nЗаметки\n\n"
-            "Можно сразу приложить фото к сообщению.\n\n"
-            "Пример:\nRizz\nул. Пятницкая, 24\nЛера\nБар"
+            "Выбери менеджера:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
         )
-        context.user_data["awaiting_add"] = True
+        context.user_data["awaiting_manager"] = True
         return
     if text == "🔄 Статус":
         await update.message.reply_text("Напиши: Название заведения статус\n\nПример: Rizz работаю")
@@ -400,6 +476,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "📋 Последние 10":
         await list_places(update, context)
         return
+    if text == "📍 Рядом":
+        await near_places(update, context)
+        return
+    if text == "👤 Менеджер":
+        await update.message.reply_text("Напиши имя менеджера.\nПример: Лера")
+        context.user_data["awaiting_manager_search"] = True
+        return
     if text == "🗺 Карта":
         await map_link(update, context)
         return
@@ -416,6 +499,30 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Обработка ожидаемых вводов
+    if context.user_data.get("awaiting_manager_search"):
+        context.user_data["awaiting_manager_search"] = False
+        context.args = [text]
+        await manager_places(update, context)
+        return
+    if context.user_data.get("awaiting_manager"):
+        context.user_data["awaiting_manager"] = False
+        context.user_data["add_manager"] = text if text != "Пропустить" else ""
+        keyboard = [[KeyboardButton(c)] for c in CATEGORIES]
+        await update.message.reply_text(
+            "Выбери категорию:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+        )
+        context.user_data["awaiting_category"] = True
+        return
+    if context.user_data.get("awaiting_category"):
+        context.user_data["awaiting_category"] = False
+        context.user_data["add_category"] = text
+        await update.message.reply_text(
+            "Теперь отправь данные:\n\nНазвание\nАдрес\nТелефон (необязательно)\nЗаметки (необязательно)\n\nМожно приложить фото.",
+            reply_markup=ReplyKeyboardMarkup([[KeyboardButton("Отмена")]], resize_keyboard=True)
+        )
+        context.user_data["awaiting_add"] = True
+        return
     if context.user_data.get("awaiting_add"):
         context.user_data["awaiting_add"] = False
         # Имитируем команду /add
@@ -454,6 +561,9 @@ def main():
     application.add_handler(CommandHandler("list", list_places))
     application.add_handler(CommandHandler("map", map_link))
     application.add_handler(CommandHandler("delete", delete_place))
+    application.add_handler(CommandHandler("near", near_places))
+    application.add_handler(CommandHandler("manager", manager_places))
+    application.add_handler(MessageHandler(filters.LOCATION, handle_location))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
