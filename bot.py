@@ -108,7 +108,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [KeyboardButton("➕ Добавить"), KeyboardButton("🔄 Статус")],
         [KeyboardButton("🔍 Найти"), KeyboardButton("📊 Статистика")],
         [KeyboardButton("🗑 Удалить"), KeyboardButton("📋 Последние 10")],
-        [KeyboardButton("🔥 Горячие"), KeyboardButton("📝 Заметка")],
         [KeyboardButton("🗺 Карта"), KeyboardButton("📍 Рядом")],
         [KeyboardButton("👤 Менеджер"), KeyboardButton("❓ Помощь")]
     ]
@@ -120,49 +119,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(text, reply_markup=reply_markup)
 
-async def hot_places(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        records = get_all_records()
-        hot = [r for r in records if str(r.get("Status") or "").lower() in ["potential", "working", "потенциал", "работаю"]]
-        if not hot:
-            await update.message.reply_text("Горячих точек нет.")
-            return
-        text = f"Горячие точки ({len(hot)}):\n\n"
-        for r in hot[:20]:
-            text += f"• {r.get('Название заведения', '—')} — {r.get('Status', '—')}\n"
-        await update.message.reply_text(text)
-    except Exception as e:
-        await update.message.reply_text(f"Ошибка: {e}")
-
-async def quick_note(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    if " — " not in text and " - " not in text:
-        await update.message.reply_text("Формат: Название — текст заметки\nПример: Rizz — договорились на пятницу")
-        return
-    sep = " — " if " — " in text else " - "
-    name, note = text.split(sep, 1)
-    name = name.strip()
-    note = note.strip()
-    try:
-        spreadsheet = get_spreadsheet()
-        for ws in spreadsheet.worksheets():
-            records = ws.get_all_records()
-            headers = ws.row_values(1)
-            name_col = next((i for i, h in enumerate(headers) if "название" in h.lower()), None)
-            notes_col = next((i for i, h in enumerate(headers) if "notes" in h.lower() or "заметк" in h.lower()), None)
-            if name_col is None:
-                continue
-            for i, row in enumerate(records, start=2):
-                if name.lower() in str(row.get(headers[name_col]) or "").lower():
-                    old = str(row.get(headers[notes_col]) or "") if notes_col is not None else ""
-                    new_note = (old + "\n" + note).strip() if old else note
-                    if notes_col is not None:
-                        ws.update_cell(i, notes_col + 1, new_note)
-                    await update.message.reply_text(f"Заметка добавлена к «{row.get(headers[name_col])}»")
-                    return
-        await update.message.reply_text("Заведение не найдено.")
-    except Exception as e:
-        await update.message.reply_text(f"Ошибка: {e}")
+async def map_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Карта: https://immmka.github.io/khm/")
 
 async def near_places(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Отправь свою геолокацию (скрепка → Геопозиция), и я покажу ближайшие заведения.")
@@ -521,13 +479,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "📋 Последние 10":
         await list_places(update, context)
         return
-    if text == "🔥 Горячие":
-        await hot_places(update, context)
-        return
-    if text == "📝 Заметка":
-        await update.message.reply_text("Напиши: Название — текст заметки\nПример: Rizz — договорились на пятницу")
-        context.user_data["awaiting_note"] = True
-        return
     if text == "📍 Рядом":
         await near_places(update, context)
         return
@@ -551,10 +502,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Обработка ожидаемых вводов
-    if context.user_data.get("awaiting_note"):
-        context.user_data["awaiting_note"] = False
-        await quick_note(update, context)
-        return
     if context.user_data.get("awaiting_manager_search"):
         context.user_data["awaiting_manager_search"] = False
         context.args = [text]
@@ -629,8 +576,6 @@ def main():
     application.add_handler(CommandHandler("list", list_places))
     application.add_handler(CommandHandler("map", map_link))
     application.add_handler(CommandHandler("delete", delete_place))
-    application.add_handler(CommandHandler("hot", hot_places))
-    application.add_handler(CommandHandler("note", quick_note))
     application.add_handler(CommandHandler("near", near_places))
     application.add_handler(CommandHandler("manager", manager_places))
     application.add_handler(MessageHandler(filters.LOCATION, handle_location))
