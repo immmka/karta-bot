@@ -113,6 +113,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [KeyboardButton("🔍 Найти"), KeyboardButton("📊 Статистика")],
         [KeyboardButton("🗑 Удалить"), KeyboardButton("📋 Последние 10")],
         [KeyboardButton("🔥 Горячие"), KeyboardButton("📝 Заметка")],
+        [KeyboardButton("👤 Мои"), KeyboardButton("📞 Звонок")],
         [KeyboardButton("🗺 Карта"), KeyboardButton("📍 Рядом")],
         [KeyboardButton("👤 Менеджер"), KeyboardButton("❓ Помощь")],
         [KeyboardButton("📥 Экспорт CSV"), KeyboardButton("⏳ Просроченные")]
@@ -121,8 +122,40 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "Привет! Я бот для управления картой клиентов.\n\nКарта: https://immmka.github.io/khm/\n\nВыбери действие кнопками ниже:"
     await update.message.reply_text(text, reply_markup=reply_markup)
 
-async def map_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🗺 Открыть интерактивную карту клиентов:\nhttps://immmka.github.io/khm/")
+async def my_places(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_name = update.effective_user.first_name or ""
+    try:
+        records = get_all_records()
+        mine = [r for r in records if user_name.lower() in str(r.get("Менеджер") or r.get("менеджер") or "").lower()]
+        if not mine:
+            await update.message.reply_text(f"Точек для «{user_name}» не найдено.\nИспользуй /manager Имя")
+            return
+        text = f"Твои точки ({len(mine)}):\n\n"
+        for r in mine[:15]:
+            text += f"• {r.get('Название заведения', '—')} ({r.get('Status', '—')})\n"
+        await update.message.reply_text(text)
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка: {e}")
+
+async def call_place(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Использование: /call Название")
+        return
+    query = " ".join(context.args).lower()
+    try:
+        records = get_all_records()
+        for r in records:
+            name = str(r.get("Название заведения") or r.get("название") or "").lower()
+            if query in name:
+                phone = r.get("phone") or r.get("Phone") or r.get("Телефон") or ""
+                if phone:
+                    await update.message.reply_text(f"📞 {r.get('Название заведения')}\n{phone}")
+                else:
+                    await update.message.reply_text(f"У «{r.get('Название заведения')}» нет номера")
+                return
+        await update.message.reply_text("Не найдено")
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка: {e}")
 
 async def hot_places(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -511,6 +544,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Напиши: Название — текст заметки\nПример: Rizz — договорились на пятницу")
         context.user_data["awaiting_note"] = True
         return
+    if text == "👤 Мои":
+        await my_places(update, context)
+        return
+    if text == "📞 Звонок":
+        await update.message.reply_text("Напиши название заведения для звонка")
+        context.user_data["awaiting_call"] = True
+        return
     if text == "📍 Рядом":
         await near_places(update, context)
         return
@@ -531,6 +571,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await start(update, context)
         return
 
+    if context.user_data.get("awaiting_call"):
+        context.user_data["awaiting_call"] = False
+        context.args = [text]
+        await call_place(update, context)
+        return
     if context.user_data.get("awaiting_note"):
         context.user_data["awaiting_note"] = False
         await quick_note(update, context)
@@ -593,6 +638,8 @@ def main():
     application.add_handler(CommandHandler("list", list_places))
     application.add_handler(CommandHandler("map", map_link))
     application.add_handler(CommandHandler("delete", delete_place))
+    application.add_handler(CommandHandler("my", my_places))
+    application.add_handler(CommandHandler("call", call_place))
     application.add_handler(CommandHandler("hot", hot_places))
     application.add_handler(CommandHandler("note", quick_note))
     application.add_handler(CommandHandler("near", near_places))
