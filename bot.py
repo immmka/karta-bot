@@ -122,6 +122,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "Привет! Я бот для управления картой клиентов.\n\nКарта: https://immmka.github.io/khm/\n\nВыбери действие кнопками ниже:"
     await update.message.reply_text(text, reply_markup=reply_markup)
 
+async def map_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🗺 Карта: https://immmka.github.io/khm/")
+
 async def my_places(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = update.effective_user.first_name or ""
     try:
