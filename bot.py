@@ -633,6 +633,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     application = Application.builder().token(TELEGRAM_TOKEN).build()
+    
+    async def error_handler(update, context):
+        logger.error(f"Ошибка: {context.error}")
+        if update and update.message:
+            await update.message.reply_text(f"Произошла ошибка: {context.error}")
+    
+    application.add_error_handler(error_handler)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("add", add_place))
     application.add_handler(CommandHandler("status", change_status))
